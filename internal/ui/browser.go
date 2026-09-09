@@ -23,13 +23,13 @@ const (
 )
 
 const (
-	headerLines        = 1
-	sectionHeaderLines = 1
-	blankLines         = 1
-	blankGaps          = 4 // header→folders, folders→files, files→metadata, metadata→footer
-	metadataBoxLines   = 5
-	footerLines        = 1
-	minPaneHeight      = 3
+	headerLines      = 1
+	blankLines       = 1
+	blankGaps        = 4 // header→folders, folders→files, files→metadata, metadata→footer
+	panelChromeLines = 3 // title line + top/bottom border, per bordered panel
+	metadataBoxLines = 5
+	footerLines      = 1
+	minPaneHeight    = 3
 )
 
 var (
@@ -41,15 +41,30 @@ var (
 			Foreground(lipgloss.AdaptiveColor{Light: "#444444", Dark: "#CCCCCC"})
 	focusedSectionStyle = sectionStyle.
 				Foreground(lipgloss.AdaptiveColor{Light: "#0060D0", Dark: "#7AD1FF"})
-	metadataBoxStyle = lipgloss.NewStyle().
+	panelBorderColor        = lipgloss.AdaptiveColor{Light: "#AAAAAA", Dark: "#555555"}
+	focusedPanelBorderColor = lipgloss.AdaptiveColor{Light: "#0060D0", Dark: "#7AD1FF"}
+	metadataBoxStyle        = lipgloss.NewStyle().
 				Border(lipgloss.RoundedBorder()).
-				BorderForeground(lipgloss.AdaptiveColor{Light: "#AAAAAA", Dark: "#555555"}).
+				BorderForeground(panelBorderColor).
 				Padding(0, 1)
 	statusStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.AdaptiveColor{Light: "#B00020", Dark: "#FF6B6B"})
 	helpStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.AdaptiveColor{Light: "#888888", Dark: "#666666"})
 )
+
+// panelStyle returns a bordered panel container, highlighted when it holds
+// keyboard focus.
+func panelStyle(focused bool) lipgloss.Style {
+	color := panelBorderColor
+	if focused {
+		color = focusedPanelBorderColor
+	}
+	return lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(color).
+		Padding(0, 1)
+}
 
 // Model is the Bubble Tea model for the interactive sample browser.
 type Model struct {
@@ -181,7 +196,7 @@ func (m *Model) applySizes() {
 		return
 	}
 
-	chrome := headerLines + sectionHeaderLines*2 + blankLines*blankGaps + metadataBoxLines + footerLines
+	chrome := headerLines + panelChromeLines*2 + blankLines*blankGaps + metadataBoxLines + footerLines
 	available := m.height - chrome
 	if available < minPaneHeight*2 {
 		available = minPaneHeight * 2
@@ -237,13 +252,17 @@ func (m Model) View() string {
 		filesHeader = sectionStyle.Render(filesHeader)
 	}
 
-	fmt.Fprintln(&b, foldersHeader)
-	fmt.Fprintln(&b, m.folders.View())
+	panelWidth := m.width - 4
+	foldersBox := panelStyle(m.focus == focusFolders).Width(panelWidth).
+		Render(foldersHeader + "\n" + m.folders.View())
+	filesBox := panelStyle(m.focus == focusFiles).Width(panelWidth).
+		Render(filesHeader + "\n" + m.files.View())
+
+	fmt.Fprintln(&b, foldersBox)
 	fmt.Fprintln(&b)
-	fmt.Fprintln(&b, filesHeader)
-	fmt.Fprintln(&b, m.files.View())
+	fmt.Fprintln(&b, filesBox)
 	fmt.Fprintln(&b)
-	fmt.Fprintln(&b, metadataBoxStyle.Width(m.width-4).Render(m.metadataView()))
+	fmt.Fprintln(&b, metadataBoxStyle.Width(panelWidth).Render(m.metadataView()))
 	fmt.Fprintln(&b)
 
 	help := "↑/↓ or j/k move   tab switch pane   enter open folder   backspace up   q quit"

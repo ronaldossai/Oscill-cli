@@ -37,9 +37,11 @@ func main() {
 	case "-h", "--help", "help":
 		printUsage()
 	default:
-		fmt.Fprintf(os.Stderr, "oscill: unknown command %q\n\n", os.Args[1])
-		printUsage()
-		os.Exit(1)
+		// Not a known subcommand — treat it as "oscill [directory]".
+		if err := runBrowse(os.Args[1:]); err != nil {
+			fmt.Fprintln(os.Stderr, "oscill:", err)
+			os.Exit(1)
+		}
 	}
 }
 
