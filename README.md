@@ -8,17 +8,29 @@ libraries from the terminal.
 
 ## Status
 
-Phase 1 (see [Roadmap](#roadmap)): recursive sample discovery and metadata
-extraction via the `scan` command. The interactive TUI browser, playback,
-search, and analysis features are not built yet.
+Phases 1–2 (see [Roadmap](#roadmap)): recursive sample discovery and metadata
+extraction (`scan`), plus an interactive TUI browser (`oscill` / `browse`).
+Playback, search, and audio analysis are not built yet.
 
 ## Getting Started
+
+Browse a library interactively:
+
+```sh
+go run ./cmd/oscill ~/Music/Samples
+# or: go run ./cmd/oscill browse ~/Music/Samples
+```
+
+Navigate with `↑`/`↓` (or `j`/`k`), `tab` to switch between the folders and
+samples panes, `enter` to open a folder, `backspace` to go up, `q` to quit.
+
+Print a one-shot metadata table instead:
 
 ```sh
 go run ./cmd/oscill scan ~/Music/Samples
 ```
 
-```
+```text
 NAME           FORMAT  SIZE       DURATION  SAMPLE RATE  CHANNELS  BIT DEPTH
 kick_808.wav   wav     144.7 KiB  840ms     44100Hz      2         16-bit
 kick_mono.wav  wav     140.7 KiB  1.5s      48000Hz      1         16-bit
@@ -40,16 +52,18 @@ go build -o oscill ./cmd/oscill
 
 ## Project Layout
 
-```
+```text
 cmd/oscill/        CLI entry point
-internal/library/  Sample discovery (scanner) and the Sample type
+internal/library/  Sample discovery (scanner, list.go) and the Sample type
 internal/audio/    Per-format metadata extraction (decoder.go, metadata.go)
+internal/format/   Shared display formatting (sizes, durations)
+internal/ui/       The interactive TUI browser (Bubble Tea)
 ```
 
 ## Roadmap
 
 1. **Scan** — recursive discovery + metadata (done)
-2. Interactive TUI browser
+2. **Interactive TUI browser** (done)
 3. Sample playback/preview
 4. Search & filtering
 5. Audio analysis (BPM, key, RMS, spectrum)
