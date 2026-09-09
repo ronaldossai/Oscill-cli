@@ -1,13 +1,56 @@
-# Oscill-cli
+# Oscill
 
-A terminal sample library written in Go.
+A terminal toolkit for music producers to browse, analyse, and manage audio
+sample libraries — built in Go.
 
-## Description
+Oscill is not a DAW. It's a fast, Unix-style tool for working with sample
+libraries from the terminal.
 
-_Coming soon._
+## Status
+
+Phase 1 (see [Roadmap](#roadmap)): recursive sample discovery and metadata
+extraction via the `scan` command. The interactive TUI browser, playback,
+search, and analysis features are not built yet.
 
 ## Getting Started
 
 ```sh
-go run .
+go run ./cmd/oscill scan ~/Music/Samples
 ```
+
+```
+NAME           FORMAT  SIZE       DURATION  SAMPLE RATE  CHANNELS  BIT DEPTH
+kick_808.wav   wav     144.7 KiB  840ms     44100Hz      2         16-bit
+kick_mono.wav  wav     140.7 KiB  1.5s      48000Hz      1         16-bit
+loop.flac      flac    3.2 MiB    -         -             -        -
+
+3 sample(s) found
+```
+
+Supported formats: WAV, MP3, FLAC, OGG (discovery for all four; full
+duration/sample-rate/channel/bit-depth metadata is currently only decoded for
+WAV — other formats show `-` rather than a guessed value).
+
+Build a standalone binary:
+
+```sh
+go build -o oscill ./cmd/oscill
+./oscill scan ~/Music/Samples
+```
+
+## Project Layout
+
+```
+cmd/oscill/        CLI entry point
+internal/library/  Sample discovery (scanner) and the Sample type
+internal/audio/    Per-format metadata extraction (decoder.go, metadata.go)
+```
+
+## Roadmap
+
+1. **Scan** — recursive discovery + metadata (done)
+2. Interactive TUI browser
+3. Sample playback/preview
+4. Search & filtering
+5. Audio analysis (BPM, key, RMS, spectrum)
+6. Persistent index/cache
