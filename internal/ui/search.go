@@ -27,7 +27,7 @@ func newSearchInput() textinput.Model {
 func (m Model) startSearch() (tea.Model, tea.Cmd) {
 	all, err := library.Scan(m.root)
 	if err != nil {
-		m.status = err.Error()
+		m.setStatus(err.Error())
 		return m, nil
 	}
 
@@ -36,7 +36,7 @@ func (m Model) startSearch() (tea.Model, tea.Cmd) {
 	m.searchTyping = true
 	m.searchInput = newSearchInput()
 	m.focus = focusFiles
-	m.status = ""
+	m.setStatus("")
 	m.applySearchResults("")
 
 	return m, m.searchInput.Focus()
@@ -107,7 +107,7 @@ func (m Model) jumpToSearchResult() (tea.Model, tea.Cmd) {
 	m.searchAll = nil
 
 	if err := m.load(dir); err != nil {
-		m.status = err.Error()
+		m.setStatus(err.Error())
 		return m, nil
 	}
 	for i, it := range m.files.Items() {

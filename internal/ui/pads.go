@@ -76,17 +76,17 @@ func (m Model) connectOrRelearnMIDI() (tea.Model, tea.Cmd) {
 	if !m.midiConnected {
 		ports, err := m.listMIDIPorts()
 		if err != nil {
-			m.status = err.Error()
+			m.setStatus(err.Error())
 			return m, nil
 		}
 		if len(ports) == 0 {
-			m.status = "no MIDI input device found"
+			m.setStatus("no MIDI input device found")
 			return m, nil
 		}
 
 		events, closeFn, err := m.connectMIDI(ports[0])
 		if err != nil {
-			m.status = err.Error()
+			m.setStatus(err.Error())
 			return m, nil
 		}
 
@@ -97,15 +97,15 @@ func (m Model) connectOrRelearnMIDI() (tea.Model, tea.Cmd) {
 		m.pads = nil
 		m.learning = true
 		m.learnGen++
-		m.status = fmt.Sprintf("Connected to %s — tap each pad...", ports[0])
-		return m, tea.Batch(waitForMIDI(events), learnIdleCmd(m.learnGen))
+		m.setStatus(fmt.Sprintf("Connected to %s — tap each pad...", ports[0]))
+		return m, tea.Batch(waitForMIDI(events), learnIdleCmd(m.learnGen), midiTickCmd())
 	}
 
 	m.pads = nil
 	m.learning = true
 	m.assigning = false
 	m.learnGen++
-	m.status = "Tap each pad again..."
+	m.setStatus("Tap each pad again...")
 	return m, learnIdleCmd(m.learnGen)
 }
 
@@ -113,18 +113,18 @@ func (m Model) connectOrRelearnMIDI() (tea.Model, tea.Cmd) {
 // currently selected sample.
 func (m Model) armAssign() (tea.Model, tea.Cmd) {
 	if !m.midiConnected || len(m.pads) == 0 {
-		m.status = "connect a MIDI controller first (press m)"
+		m.setStatus("connect a MIDI controller first (press m)")
 		return m, nil
 	}
 	item, ok := m.files.SelectedItem().(sampleItem)
 	if !ok {
-		m.status = "select a sample to assign"
+		m.setStatus("select a sample to assign")
 		return m, nil
 	}
 
 	m.assigning = true
 	m.assignSample = item.Sample
-	m.status = fmt.Sprintf("Tap a pad to assign %s… (esc to cancel)", m.assignSample.Name)
+	m.setStatus(fmt.Sprintf("Tap a pad to assign %s… (esc to cancel)", m.assignSample.Name))
 	return m, nil
 }
 
@@ -141,6 +141,7 @@ func (m Model) findPad(note uint8) int {
 // for the next one.
 func (m Model) handleMIDINote(msg midiNoteMsg) (tea.Model, tea.Cmd) {
 	cmds := []tea.Cmd{waitForMIDI(m.midiEvents)}
+	m.logMIDIEvent(midi.NoteEvent(msg))
 
 	if !msg.On {
 		return m, tea.Batch(cmds...)
@@ -151,7 +152,7 @@ func (m Model) handleMIDINote(msg midiNoteMsg) (tea.Model, tea.Cmd) {
 			m.pads = append(m.pads, padSlot{Note: msg.Key})
 		}
 		m.learnGen++
-		m.status = fmt.Sprintf("Learning pads… %d detected so far (pause to finish)", len(m.pads))
+		m.setStatus(fmt.Sprintf("Learning pads… %d detected so far (pause to finish)", len(m.pads)))
 		cmds = append(cmds, learnIdleCmd(m.learnGen))
 		return m, tea.Batch(cmds...)
 	}
@@ -165,7 +166,7 @@ func (m Model) handleMIDINote(msg midiNoteMsg) (tea.Model, tea.Cmd) {
 		s := m.assignSample
 		m.pads[idx].Sample = &s
 		m.assigning = false
-		m.status = fmt.Sprintf("Assigned %s to pad %d", s.Name, idx+1)
+		m.setStatus(fmt.Sprintf("Assigned %s to pad %d", s.Name, idx+1))
 		return m, tea.Batch(cmds...)
 	}
 
@@ -177,16 +178,16 @@ func (m Model) handleMIDINote(msg midiNoteMsg) (tea.Model, tea.Cmd) {
 	if pad := m.pads[idx]; pad.Sample != nil {
 		done, err := m.player.Play(pad.Sample.Path, string(pad.Sample.Format))
 		if err != nil {
-			m.status = err.Error()
+			m.setStatus(err.Error())
 		} else {
 			m.playing = true
 			m.playingPath = pad.Sample.Path
 			m.playingDone = done
-			m.status = ""
+			m.setStatus("")
 			cmds = append(cmds, waitForPlayback(done))
 		}
 	} else {
-		m.status = fmt.Sprintf("Pad %d is empty — press 'a' on a sample to assign it", idx+1)
+		m.setStatus(fmt.Sprintf("Pad %d is empty — press 'a' on a sample to assign it", idx+1))
 	}
 
 	return m, tea.Batch(cmds...)

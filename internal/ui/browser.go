@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -110,6 +111,7 @@ type Model struct {
 	midiPortName  string
 	midiClose     func()
 	midiEvents    <-chan midi.NoteEvent
+	midiLog       []midiLogEntry
 
 	pads     []padSlot
 	learning bool
@@ -128,6 +130,30 @@ type Model struct {
 
 	width, height int
 	status        string
+	statusSetAt   time.Time
+}
+
+// statusTimeout is how long a status/error message stays in the footer
+// before it reverts to the keybinding help text, so a one-off message like
+// "already at the library root" doesn't permanently bury the help.
+const statusTimeout = 3 * time.Second
+
+// statusCheckInterval drives the check for whether the current status has
+// aged past statusTimeout. It runs for the life of the program (started
+// once from Init), independent of any other feature being active.
+const statusCheckInterval = 250 * time.Millisecond
+
+// setStatus sets the footer's status/error text and timestamps it for
+// statusTickMsg to expire later. Passing "" clears it immediately.
+func (m *Model) setStatus(s string) {
+	m.status = s
+	m.statusSetAt = time.Now()
+}
+
+type statusTickMsg struct{}
+
+func statusTickCmd() tea.Cmd {
+	return tea.Tick(statusCheckInterval, func(time.Time) tea.Msg { return statusTickMsg{} })
 }
 
 // NewBrowser creates a browser rooted at root. Navigation with "up a
@@ -170,7 +196,7 @@ func NewBrowser(root string) (Model, error) {
 	return m, nil
 }
 
-func (m Model) Init() tea.Cmd { return nil }
+func (m Model) Init() tea.Cmd { return statusTickCmd() }
 
 // playbackFinishedMsg reports that a previously started Play call's done
 // channel has closed. It carries that channel so a stale completion (from a
@@ -213,13 +239,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pads = nil
 		m.learning = false
 		m.assigning = false
-		m.status = "MIDI input disconnected"
+		m.setStatus("MIDI input disconnected")
 		return m, nil
+
+	case statusTickMsg:
+		// Active-mode reminders (mid-learn, mid-assign) stay up until that
+		// mode ends rather than expiring while the user still needs them.
+		if m.status != "" && !m.assigning && !m.learning && time.Since(m.statusSetAt) >= statusTimeout {
+			m.status = ""
+		}
+		return m, statusTickCmd()
+
+	case midiTickMsg:
+		if !m.midiConnected {
+			return m, nil // let the loop end once disconnected
+		}
+		return m, midiTickCmd()
 
 	case learnIdleMsg:
 		if m.learning && msg.gen == m.learnGen {
 			m.learning = false
-			m.status = fmt.Sprintf("Detected %d pad(s) on %s", len(m.pads), m.midiPortName)
+			m.setStatus(fmt.Sprintf("Detected %d pad(s) on %s", len(m.pads), m.midiPortName))
 		}
 		return m, nil
 
@@ -267,7 +307,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch {
 			case m.assigning:
 				m.assigning = false
-				m.status = ""
+				m.setStatus("")
 			case m.searching:
 				m.clearSearch()
 			}
@@ -292,7 +332,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if item, ok := m.folders.SelectedItem().(dirItem); ok {
 					next := filepath.Join(m.dir, string(item))
 					if err := m.load(next); err != nil {
-						m.status = err.Error()
+						m.setStatus(err.Error())
 					}
 				}
 			}
@@ -304,9 +344,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			if m.dir == m.root {
-				m.status = "already at the library root"
+				m.setStatus("already at the library root")
 			} else if err := m.load(filepath.Dir(m.dir)); err != nil {
-				m.status = err.Error()
+				m.setStatus(err.Error())
 			}
 			return m, nil
 		}
@@ -340,7 +380,7 @@ func (m Model) togglePlay() (tea.Model, tea.Cmd) {
 
 	done, err := m.player.Play(s.Path, string(s.Format))
 	if err != nil {
-		m.status = err.Error()
+		m.setStatus(err.Error())
 		m.playing = false
 		m.playingPath = ""
 		m.playingDone = nil
@@ -350,7 +390,7 @@ func (m Model) togglePlay() (tea.Model, tea.Cmd) {
 	m.playing = true
 	m.playingPath = s.Path
 	m.playingDone = done
-	m.status = ""
+	m.setStatus("")
 	return m, waitForPlayback(done)
 }
 
@@ -371,7 +411,7 @@ func (m *Model) load(dir string) error {
 	}
 
 	m.dir = dir
-	m.status = ""
+	m.setStatus("")
 	m.folders.SetItems(dirItems)
 	m.files.SetItems(sampleItems)
 	m.folders.Select(0)
@@ -399,8 +439,22 @@ func (m *Model) applySizes() {
 		filesHeight = minPaneHeight
 	}
 
-	m.folders.SetSize(m.width, foldersHeight)
+	_, halfWidth := m.panelWidths()
+	m.folders.SetSize(halfWidth, foldersHeight)
 	m.files.SetSize(m.width, filesHeight)
+}
+
+// panelWidths returns the content width (excluding border/padding) for a
+// full-width panel and for one of the two side-by-side panels in the top
+// row (Folders and MIDI telemetry).
+func (m Model) panelWidths() (full, half int) {
+	full = m.width - 4
+	const gap = 1
+	half = (m.width-gap)/2 - 4
+	if half < 10 {
+		half = 10
+	}
+	return full, half
 }
 
 const (
@@ -438,11 +492,11 @@ func (m Model) View() string {
 		filesHeader = focusedSectionStyle.Render(filesHeader)
 	}
 
-	panelWidth := m.width - 4
+	panelWidth, halfWidth := m.panelWidths()
 
 	var foldersBox string
 	if m.searching {
-		foldersBox = panelStyle(true).Width(panelWidth).
+		foldersBox = panelStyle(true).Width(halfWidth).
 			Render(focusedSectionStyle.Render("Search") + "\n" + m.searchPanelView())
 	} else {
 		foldersHeader := "Folders"
@@ -451,9 +505,15 @@ func (m Model) View() string {
 		} else {
 			foldersHeader = sectionStyle.Render(foldersHeader)
 		}
-		foldersBox = panelStyle(m.focus == focusFolders).Width(panelWidth).
+		foldersBox = panelStyle(m.focus == focusFolders).Width(halfWidth).
 			Render(foldersHeader + "\n" + m.folders.View())
 	}
+
+	midiBox := panelStyle(false).Width(halfWidth).
+		Render(sectionStyle.Render("MIDI") + "\n" + m.midiPanelView(m.folders.Height(), halfWidth))
+
+	topRow := lipgloss.JoinHorizontal(lipgloss.Top,
+		lipgloss.NewStyle().MarginRight(1).Render(foldersBox), midiBox)
 
 	filesBox := panelStyle(m.focus == focusFiles).Width(panelWidth).
 		Render(filesHeader + "\n" + m.files.View())
@@ -461,7 +521,7 @@ func (m Model) View() string {
 	padsBox := panelStyle(false).Width(panelWidth).
 		Render(sectionStyle.Render("Pads") + "\n" + m.padsView())
 
-	fmt.Fprintln(&b, foldersBox)
+	fmt.Fprintln(&b, topRow)
 	fmt.Fprintln(&b)
 	fmt.Fprintln(&b, filesBox)
 	fmt.Fprintln(&b)

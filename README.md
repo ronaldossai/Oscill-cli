@@ -76,6 +76,13 @@ Homebrew packages required. Linux builds will additionally need ALSA
 development headers (e.g. `libasound2-dev` on Debian/Ubuntu) available at
 build time; this hasn't been tested on Linux yet.
 
+Beside the Folders panel, a MIDI telemetry panel shows every note event as
+it arrives — timestamp, on/off, note number, velocity, and which pad (if
+any) it maps to — regardless of whether it's currently doing anything, so
+you can watch exactly what your controller is sending, including notes that
+aren't mapped to a pad (e.g. to see what the keybed sends before deciding
+whether to map it).
+
 Print a one-shot metadata table instead:
 
 ```sh
@@ -113,7 +120,8 @@ internal/audio/    Per-format metadata extraction (decoder.go, metadata.go)
 internal/format/   Shared display formatting (sizes, durations)
 internal/midi/     MIDI input: listing ports and receiving note events
 internal/ui/       The interactive TUI browser (Bubble Tea), including the
-                   drum-pad mode (pads.go) and live search (search.go)
+                   drum-pad mode (pads.go), MIDI telemetry (telemetry.go),
+                   and live search (search.go)
 ```
 
 ## Roadmap
