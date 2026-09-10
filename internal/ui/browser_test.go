@@ -35,7 +35,7 @@ func sendKey(t *testing.T, m Model, key string) Model {
 	t.Helper()
 	var msg tea.KeyMsg
 	switch key {
-	case "up", "down", "left", "right", "enter", "backspace", "tab":
+	case "up", "down", "left", "right", "enter", "backspace", "tab", "space":
 		msg = tea.KeyMsg{Type: keyType(key)}
 	default:
 		msg = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)}
@@ -60,6 +60,8 @@ func keyType(key string) tea.KeyType {
 		return tea.KeyBackspace
 	case "tab":
 		return tea.KeyTab
+	case "space":
+		return tea.KeySpace
 	}
 	panic("unknown key " + key)
 }

@@ -11,9 +11,19 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/ronaldossai/Oscill-cli/internal/audio"
 	"github.com/ronaldossai/Oscill-cli/internal/format"
 	"github.com/ronaldossai/Oscill-cli/internal/library"
+	"github.com/ronaldossai/Oscill-cli/internal/midi"
 )
+
+// samplePlayer is the subset of *audio.Player the browser depends on,
+// factored out so tests can substitute a fake instead of touching real
+// audio hardware.
+type samplePlayer interface {
+	Play(path string, sampleFormat string) (<-chan struct{}, error)
+	Stop()
+}
 
 type focusedPane int
 
@@ -25,8 +35,9 @@ const (
 const (
 	headerLines      = 1
 	blankLines       = 1
-	blankGaps        = 4 // header→folders, folders→files, files→metadata, metadata→footer
+	blankGaps        = 5 // header→folders, folders→files, files→pads, pads→metadata, metadata→footer
 	panelChromeLines = 3 // title line + top/bottom border, per bordered panel
+	padsBoxLines     = 4 // title line + 1 content line + top/bottom border
 	metadataBoxLines = 5
 	footerLines      = 1
 	minPaneHeight    = 3
@@ -49,6 +60,8 @@ var (
 				Padding(0, 1)
 	statusStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.AdaptiveColor{Light: "#B00020", Dark: "#FF6B6B"})
+	playingStyle = lipgloss.NewStyle().Bold(true).
+			Foreground(lipgloss.AdaptiveColor{Light: "#0A8A3E", Dark: "#7CE38B"})
 	helpStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.AdaptiveColor{Light: "#888888", Dark: "#666666"})
 )
@@ -75,6 +88,29 @@ type Model struct {
 	files   list.Model
 	focus   focusedPane
 
+	player      samplePlayer
+	playing     bool
+	playingPath string
+	playingDone <-chan struct{}
+
+	listMIDIPorts func() ([]string, error)
+	connectMIDI   func(port string) (<-chan midi.NoteEvent, func(), error)
+
+	midiConnected bool
+	midiPortName  string
+	midiClose     func()
+	midiEvents    <-chan midi.NoteEvent
+
+	pads     []padSlot
+	learning bool
+	learnGen int
+
+	assigning    bool
+	assignSample library.Sample
+
+	flashPad int
+	flashGen int
+
 	width, height int
 	status        string
 }
@@ -94,7 +130,13 @@ func NewBrowser(root string) (Model, error) {
 		return Model{}, fmt.Errorf("%s is not a directory", abs)
 	}
 
-	m := Model{root: abs, dir: abs, focus: focusFolders}
+	m := Model{
+		root: abs, dir: abs, focus: focusFolders,
+		player:        audio.NewPlayer(),
+		listMIDIPorts: midi.Ports,
+		connectMIDI:   midi.Listen,
+		flashPad:      -1,
+	}
 
 	m.folders = list.New(nil, itemDelegate{}, 0, 0)
 	m.files = list.New(nil, itemDelegate{}, 0, 0)
@@ -115,6 +157,22 @@ func NewBrowser(root string) (Model, error) {
 
 func (m Model) Init() tea.Cmd { return nil }
 
+// playbackFinishedMsg reports that a previously started Play call's done
+// channel has closed. It carries that channel so a stale completion (from a
+// sample that was superseded by a newer Play call) can be told apart from
+// the one currently playing.
+type playbackFinishedMsg struct{ done <-chan struct{} }
+
+// waitForPlayback returns a command that blocks until done is closed, then
+// reports it back to Update. It runs on Bubble Tea's own goroutine, so it
+// does not block the UI.
+func waitForPlayback(done <-chan struct{}) tea.Cmd {
+	return func() tea.Msg {
+		<-done
+		return playbackFinishedMsg{done: done}
+	}
+}
+
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -123,10 +181,72 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.applySizes()
 		return m, nil
 
+	case playbackFinishedMsg:
+		if m.playing && msg.done == m.playingDone {
+			m.playing = false
+			m.playingPath = ""
+			m.playingDone = nil
+		}
+		return m, nil
+
+	case midiNoteMsg:
+		return m.handleMIDINote(msg)
+
+	case midiClosedMsg:
+		m.midiConnected = false
+		m.midiPortName = ""
+		m.pads = nil
+		m.learning = false
+		m.assigning = false
+		m.status = "MIDI input disconnected"
+		return m, nil
+
+	case learnIdleMsg:
+		if m.learning && msg.gen == m.learnGen {
+			m.learning = false
+			m.status = fmt.Sprintf("Detected %d pad(s) on %s", len(m.pads), m.midiPortName)
+		}
+		return m, nil
+
+	case padFlashDoneMsg:
+		if msg.gen == m.flashGen {
+			m.flashPad = -1
+		}
+		return m, nil
+
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "ctrl+c", "q":
+			m.player.Stop()
+			if m.midiClose != nil {
+				m.midiClose()
+			}
 			return m, tea.Quit
+
+		case " ":
+			return m.togglePlay()
+
+		case "s":
+			if m.playing {
+				m.player.Stop()
+				m.playing = false
+				m.playingPath = ""
+				m.playingDone = nil
+			}
+			return m, nil
+
+		case "m":
+			return m.connectOrRelearnMIDI()
+
+		case "a":
+			return m.armAssign()
+
+		case "esc":
+			if m.assigning {
+				m.assigning = false
+				m.status = ""
+			}
+			return m, nil
 
 		case "tab":
 			if m.focus == focusFolders {
@@ -166,6 +286,39 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+// togglePlay starts playing the selected sample, or stops it if it's
+// already the one playing.
+func (m Model) togglePlay() (tea.Model, tea.Cmd) {
+	item, ok := m.files.SelectedItem().(sampleItem)
+	if !ok {
+		return m, nil
+	}
+	s := library.Sample(item)
+
+	if m.playing && m.playingPath == s.Path {
+		m.player.Stop()
+		m.playing = false
+		m.playingPath = ""
+		m.playingDone = nil
+		return m, nil
+	}
+
+	done, err := m.player.Play(s.Path, string(s.Format))
+	if err != nil {
+		m.status = err.Error()
+		m.playing = false
+		m.playingPath = ""
+		m.playingDone = nil
+		return m, nil
+	}
+
+	m.playing = true
+	m.playingPath = s.Path
+	m.playingDone = done
+	m.status = ""
+	return m, waitForPlayback(done)
+}
+
 // load reads dir's contents and replaces the folders/files panes with them.
 func (m *Model) load(dir string) error {
 	listing, err := library.ListDir(dir)
@@ -196,7 +349,7 @@ func (m *Model) applySizes() {
 		return
 	}
 
-	chrome := headerLines + panelChromeLines*2 + blankLines*blankGaps + metadataBoxLines + footerLines
+	chrome := headerLines + panelChromeLines*2 + blankLines*blankGaps + padsBoxLines + metadataBoxLines + footerLines
 	available := m.height - chrome
 	if available < minPaneHeight*2 {
 		available = minPaneHeight * 2
@@ -217,7 +370,7 @@ func (m *Model) applySizes() {
 
 const (
 	minTerminalWidth  = 40
-	minTerminalHeight = 20
+	minTerminalHeight = 26
 )
 
 func (m Model) View() string {
@@ -258,17 +411,25 @@ func (m Model) View() string {
 	filesBox := panelStyle(m.focus == focusFiles).Width(panelWidth).
 		Render(filesHeader + "\n" + m.files.View())
 
+	padsBox := panelStyle(false).Width(panelWidth).
+		Render(sectionStyle.Render("Pads") + "\n" + m.padsView())
+
 	fmt.Fprintln(&b, foldersBox)
 	fmt.Fprintln(&b)
 	fmt.Fprintln(&b, filesBox)
 	fmt.Fprintln(&b)
+	fmt.Fprintln(&b, padsBox)
+	fmt.Fprintln(&b)
 	fmt.Fprintln(&b, metadataBoxStyle.Width(panelWidth).Render(m.metadataView()))
 	fmt.Fprintln(&b)
 
-	help := "↑/↓ or j/k move   tab switch pane   enter open folder   backspace up   q quit"
-	if m.status != "" {
+	help := "↑/↓ move  tab pane  enter open  bkspc up  space play  a assign  m midi  q quit"
+	switch {
+	case m.status != "":
 		fmt.Fprint(&b, statusStyle.Render(m.status))
-	} else {
+	case m.playing:
+		fmt.Fprint(&b, playingStyle.Render(fmt.Sprintf("▶ Playing: %s   (space to stop)", filepath.Base(m.playingPath))))
+	default:
 		fmt.Fprint(&b, helpStyle.Render(help))
 	}
 
