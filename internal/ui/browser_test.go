@@ -74,7 +74,7 @@ func TestBrowserNavigatesFoldersAndBack(t *testing.T) {
 		t.Fatalf("NewBrowser: %v", err)
 	}
 
-	next, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 30})
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 36})
 	m = next.(Model)
 
 	view := m.View()
@@ -116,7 +116,7 @@ func TestBrowserFocusSwitchAndMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewBrowser: %v", err)
 	}
-	next, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 30})
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 36})
 	m = next.(Model)
 
 	if m.focus != focusFolders {

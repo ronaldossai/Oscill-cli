@@ -8,10 +8,10 @@ libraries from the terminal.
 
 ## Status
 
-Phases 1–3 (see [Roadmap](#roadmap)): recursive sample discovery and metadata
-extraction (`scan`), an interactive TUI browser (`oscill` / `browse`), and
-sample playback/preview (`space`), plus a MIDI drum-pad mode. Search and
-audio analysis are not built yet.
+Phases 1–4 (see [Roadmap](#roadmap)): recursive sample discovery and metadata
+extraction (`scan`), an interactive TUI browser (`oscill` / `browse`), sample
+playback/preview (`space`), and search & filtering (`find`, `/`), plus a MIDI
+drum-pad mode. Audio analysis (BPM/key/etc.) is not built yet.
 
 ## Getting Started
 
@@ -28,6 +28,30 @@ preview/stop the selected sample, `q` to quit. Playback is decoded and
 played asynchronously (via [gopxl/beep](https://github.com/gopxl/beep)), so
 the UI stays responsive while a sample plays. Supported for preview: WAV,
 MP3, FLAC, OGG.
+
+### Search & filtering
+
+Inside the browser, press `/` to search the whole library live — not just
+the current folder. Type to filter by name or folder as you go (e.g. "kick"
+matches both `kick_808.wav` and anything under a `Kicks/` folder); results
+show their path so you can tell same-named files in different folders
+apart. Press `enter` to stop editing the query and navigate the results
+normally (`space` still previews, `a` still assigns to a pad); press `enter`
+again on a result to jump to its folder, or `esc` at any point to clear the
+search and go back to normal browsing.
+
+From the command line, `oscill find [directory] [flags]` does the same
+recursive search non-interactively:
+
+```sh
+oscill find ~/Music/Samples --name kick
+oscill find ~/Music/Samples --format wav --max-duration 2s
+```
+
+Flags (any order relative to the directory): `--name` (substring match on
+filename or path), `--format` (wav/mp3/flac/ogg), `--min-duration` /
+`--max-duration` (Go duration strings like `500ms`, `1.5s`). Duration
+filters only match samples with known duration (currently WAV).
 
 ### MIDI drum pads
 
@@ -82,13 +106,14 @@ go build -o oscill ./cmd/oscill
 
 ```text
 cmd/oscill/        CLI entry point
-internal/library/  Sample discovery (scanner, list.go) and the Sample type
+internal/library/  Sample discovery (scanner, list.go), the Sample type,
+                   and search/filtering (search.go)
 internal/audio/    Per-format metadata extraction (decoder.go, metadata.go)
                    and playback (playback.go)
 internal/format/   Shared display formatting (sizes, durations)
 internal/midi/     MIDI input: listing ports and receiving note events
 internal/ui/       The interactive TUI browser (Bubble Tea), including the
-                   drum-pad mode (pads.go)
+                   drum-pad mode (pads.go) and live search (search.go)
 ```
 
 ## Roadmap
@@ -96,7 +121,7 @@ internal/ui/       The interactive TUI browser (Bubble Tea), including the
 1. **Scan** — recursive discovery + metadata (done)
 2. **Interactive TUI browser** (done)
 3. **Sample playback/preview** (done)
-4. Search & filtering
+4. **Search & filtering** (done)
 5. Audio analysis (BPM, key, RMS, spectrum)
 6. Persistent index/cache
 

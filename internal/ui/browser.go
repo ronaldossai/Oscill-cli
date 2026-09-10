@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -32,8 +33,17 @@ const (
 	focusFiles
 )
 
+// oscillBanner is the block-letter "OSCILL" wordmark shown at the top of
+// the browser (generated with the figlet "small" font).
+const oscillBanner = `   ___    ___    ___   ___   _      _
+  / _ \  / __|  / __| |_ _| | |    | |
+ | (_) | \__ \ | (__   | |  | |__  | |__
+  \___/  |___/  \___| |___| |____| |____|`
+
+const bannerLines = 4
+
 const (
-	headerLines      = 1
+	headerLines      = bannerLines + 1 // banner + path line
 	blankLines       = 1
 	blankGaps        = 5 // header→folders, folders→files, files→pads, pads→metadata, metadata→footer
 	panelChromeLines = 3 // title line + top/bottom border, per bordered panel
@@ -110,6 +120,11 @@ type Model struct {
 
 	flashPad int
 	flashGen int
+
+	searching    bool
+	searchTyping bool
+	searchInput  textinput.Model
+	searchAll    []library.Sample
 
 	width, height int
 	status        string
@@ -215,6 +230,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		if m.searchTyping {
+			return m.handleSearchTypingKey(msg)
+		}
+
 		switch msg.String() {
 		case "ctrl+c", "q":
 			m.player.Stop()
@@ -241,14 +260,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "a":
 			return m.armAssign()
 
+		case "/":
+			return m.startSearch()
+
 		case "esc":
-			if m.assigning {
+			switch {
+			case m.assigning:
 				m.assigning = false
 				m.status = ""
+			case m.searching:
+				m.clearSearch()
 			}
 			return m, nil
 
 		case "tab":
+			if m.searching {
+				return m, nil
+			}
 			if m.focus == focusFolders {
 				m.focus = focusFiles
 			} else {
@@ -257,6 +285,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case "enter":
+			if m.searching {
+				return m.jumpToSearchResult()
+			}
 			if m.focus == focusFolders {
 				if item, ok := m.folders.SelectedItem().(dirItem); ok {
 					next := filepath.Join(m.dir, string(item))
@@ -268,6 +299,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case "backspace", "h", "left":
+			if m.searching {
+				m.clearSearch()
+				return m, nil
+			}
 			if m.dir == m.root {
 				m.status = "already at the library root"
 			} else if err := m.load(filepath.Dir(m.dir)); err != nil {
@@ -293,7 +328,7 @@ func (m Model) togglePlay() (tea.Model, tea.Cmd) {
 	if !ok {
 		return m, nil
 	}
-	s := library.Sample(item)
+	s := item.Sample
 
 	if m.playing && m.playingPath == s.Path {
 		m.player.Stop()
@@ -332,7 +367,7 @@ func (m *Model) load(dir string) error {
 	}
 	sampleItems := make([]list.Item, len(listing.Samples))
 	for i, s := range listing.Samples {
-		sampleItems[i] = sampleItem(s)
+		sampleItems[i] = sampleItem{Sample: s, Display: s.Name}
 	}
 
 	m.dir = dir
@@ -369,8 +404,8 @@ func (m *Model) applySizes() {
 }
 
 const (
-	minTerminalWidth  = 40
-	minTerminalHeight = 26
+	minTerminalWidth  = 45 // must fit the banner's widest line (41 cols)
+	minTerminalHeight = 32
 )
 
 func (m Model) View() string {
@@ -389,25 +424,37 @@ func (m Model) View() string {
 	}
 
 	var b strings.Builder
-	fmt.Fprintln(&b, titleStyle.Render("OSCILL")+"  "+pathStyle.Render(rel))
+	fmt.Fprintln(&b, titleStyle.Render(oscillBanner))
+	fmt.Fprintln(&b, pathStyle.Render(rel))
 	fmt.Fprintln(&b)
 
-	foldersHeader := "Folders"
 	filesHeader := "Samples"
-	if m.focus == focusFolders {
-		foldersHeader = focusedSectionStyle.Render(foldersHeader)
-	} else {
-		foldersHeader = sectionStyle.Render(foldersHeader)
+	if m.searching {
+		filesHeader = "Search results"
 	}
-	if m.focus == focusFiles {
-		filesHeader = focusedSectionStyle.Render(filesHeader)
-	} else {
+	if m.focus == focusFolders {
 		filesHeader = sectionStyle.Render(filesHeader)
+	} else {
+		filesHeader = focusedSectionStyle.Render(filesHeader)
 	}
 
 	panelWidth := m.width - 4
-	foldersBox := panelStyle(m.focus == focusFolders).Width(panelWidth).
-		Render(foldersHeader + "\n" + m.folders.View())
+
+	var foldersBox string
+	if m.searching {
+		foldersBox = panelStyle(true).Width(panelWidth).
+			Render(focusedSectionStyle.Render("Search") + "\n" + m.searchPanelView())
+	} else {
+		foldersHeader := "Folders"
+		if m.focus == focusFolders {
+			foldersHeader = focusedSectionStyle.Render(foldersHeader)
+		} else {
+			foldersHeader = sectionStyle.Render(foldersHeader)
+		}
+		foldersBox = panelStyle(m.focus == focusFolders).Width(panelWidth).
+			Render(foldersHeader + "\n" + m.folders.View())
+	}
+
 	filesBox := panelStyle(m.focus == focusFiles).Width(panelWidth).
 		Render(filesHeader + "\n" + m.files.View())
 
@@ -423,7 +470,7 @@ func (m Model) View() string {
 	fmt.Fprintln(&b, metadataBoxStyle.Width(panelWidth).Render(m.metadataView()))
 	fmt.Fprintln(&b)
 
-	help := "↑/↓ move  tab pane  enter open  bkspc up  space play  a assign  m midi  q quit"
+	help := "↑/↓ move  tab pane  enter open  bkspc up  space play  / search  a assign  m midi  q quit"
 	switch {
 	case m.status != "":
 		fmt.Fprint(&b, statusStyle.Render(m.status))
@@ -444,7 +491,7 @@ func (m Model) metadataView() string {
 	if item == nil {
 		return "No sample selected.\n\n"
 	}
-	s := library.Sample(item.(sampleItem))
+	s := item.(sampleItem).Sample
 
 	return fmt.Sprintf(
 		"%s\nFormat: %s   Size: %s   Duration: %s\nSample Rate: %s   Channels: %s   Bit Depth: %s",

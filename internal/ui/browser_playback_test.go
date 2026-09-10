@@ -47,7 +47,7 @@ func newTestBrowser(t *testing.T) (Model, *fakePlayer) {
 	fp := &fakePlayer{}
 	m.player = fp
 
-	next, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 30})
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 36})
 	m = next.(Model)
 
 	m = sendKey(t, m, "tab") // focus the Samples pane so a sample is selected

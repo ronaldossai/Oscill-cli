@@ -30,7 +30,7 @@ func (d itemDelegate) Render(w io.Writer, m list.Model, index int, item list.Ite
 	case dirItem:
 		name = string(it) + "/"
 	case sampleItem:
-		name = it.Name
+		name = it.Display
 	default:
 		return
 	}

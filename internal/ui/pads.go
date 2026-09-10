@@ -123,7 +123,7 @@ func (m Model) armAssign() (tea.Model, tea.Cmd) {
 	}
 
 	m.assigning = true
-	m.assignSample = library.Sample(item)
+	m.assignSample = item.Sample
 	m.status = fmt.Sprintf("Tap a pad to assign %s… (esc to cancel)", m.assignSample.Name)
 	return m, nil
 }
